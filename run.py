@@ -10,6 +10,7 @@ from urlparse import *
 from urlparse import urljoin
 import redis
 import pymongo
+import datetime
 import urllib2
 import json
 import re
@@ -61,7 +62,7 @@ def get_uk_all(url):
 			url.index('fans')
 			return get_ren_info(url,'fans')
 		except ValueError:
-			raise ValueError('url str not found followers and fans')
+			raise Exception('url str not found followers and fans')
 def ren_mongo(uk, number):
 	db.ren.update({'uk':uk}, {'$set':{'fangwen':number}})
 def url_mongo(url, number):
@@ -69,17 +70,32 @@ def url_mongo(url, number):
 def drop():
 	db.ren.drop()
 	db.url.drop()
+def url_save(dics):
+	try:
+		db.url.save(dics)
+	except pymongo.errors.DuplicateKeyError, e:
+		print pymongo.errors.DuplicateKeyError('url save suoying chongfu')
+def ren_save(dics):
+	try:
+		db.ren.save(dics)
+	except pymongo.errors.DuplicateKeyError, e:
+		print pymongo.errors.DuplicateKeyError('ren save suoying chongfu')
+			
+
 def init():
 	ren_one = db.ren.find_one({'fangwen':1})
 	if not ren_one:
-		url = 'http://pan.baidu.com/wap/share/home/followers?uk=657260084&start=0'
-		rens = get_uk_all(url)
-		for i in rens:
-			db.ren.save(i)
-		url = 'http://pan.baidu.com/wap/share/home/followers?uk=657260084&start=24'
-		rens = get_uk_all(url)
-		for i in rens:
-			db.ren.save(i)
+		try:
+			url = 'http://pan.baidu.com/wap/share/home/followers?uk=657260084&start=0'
+			rens = get_uk_all(url)
+			for i in rens:
+				ren_save(i)
+			url = 'http://pan.baidu.com/wap/share/home/followers?uk=657260084&start=24'
+			rens = get_uk_all(url)
+			for i in rens:
+				ren_save(i)
+		except pymongo.errors.DuplicateKeyError, e:
+			print pymongo.errors.DuplicateKeyError('zai suoying chongfu')
 	#queue
 	for i in range(20):
 		ren_one = db.ren.find_one({'fangwen':1})
@@ -91,19 +107,17 @@ def init():
 			url_queue.put(url_one)
 			url_mongo(url_one['url'], 2)
 def check():
-	try:
-		while True:
-			if ren_queue.qsize() <20:
-				ren_one = db.ren.find_one({'fangwen':1})
-				if ren_one:
-					ren_queue.put(ren_one)
-					ren_mongo(ren_one['uk'], 2)
-			if url_queue.qsize() <20:
-				if url_one:
-					url_queue.put(url_one)
-					url_mongo(url_one['url'], 2)
-	except Exception, e:
-		raise Exception('??')
+	while True:
+		if ren_queue.qsize()<20:
+			ren_one = db.ren.find_one({'fangwen':1})
+			if ren_one:
+				ren_queue.put(ren_one)
+				ren_mongo(ren_one['uk'], 2)
+		if url_queue.qsize() <20:
+			url_one = db.url.find_one({'fangwen':1})
+			if url_one:
+				url_queue.put(url_one)
+				url_mongo(url_one['url'], 2)
 def deal_ren():
 	name = threading.currentThread().getName()
 	# = '1'
@@ -111,16 +125,16 @@ def deal_ren():
 		ren_one = ren_queue.get()
 		if ren_one:
 			uk = ren_one['uk']
-			print "["+name+"号] "+str(uk)+"doing\n"
+			print "["+datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")+"]["+name+"号] "+str(uk)+"doing\n"
 			try:
 				follow_count = ren_one['follow_count']
 				fans_count = ren_one['fans_count']
 				print follow_count
 				print fans_count
 				for i in range(0,(24 if follow_count > 24 else follow_count),24):
-					db.url.save({'url':'http://pan.baidu.com/wap/share/home/followers?uk='+str(uk)+'&start='+str(i),'fangwen':1})
+					url_save({'url':'http://pan.baidu.com/wap/share/home/followers?uk='+str(uk)+'&start='+str(i),'fangwen':1})
 				for j in range(0,(24 if fans_count > 24 else fans_count),24):
-					db.url.save({'url':'http://pan.baidu.com/wap/share/home/fans?uk='+str(uk)+'&start='+str(j),'fangwen':1})
+					url_save({'url':'http://pan.baidu.com/wap/share/home/fans?uk='+str(uk)+'&start='+str(j),'fangwen':1})
 				ren_mongo(uk, 3)
 			except Exception, e:
 				#db.ren.update({'uk':uk}, {'$set':{'fangwen':1}})
@@ -133,17 +147,22 @@ def deal_url():
 		if url_one:
 			url = url_one['url']
 			#db.url.update({'url':url}, {'$set':{'fangwen':2}})
-			print "["+name+"号] doing\n"
+			print "["+datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")+"]["+name+"号] doing\n"
 			try:
 				rens = get_uk_all(url)
 				for i in rens:
-					db.ren.save(i)
+					ren_save(i)
 				url_mongo(url, 3)
+			except TypeError:
+				pass
 			except Exception, e:
 				#r.smove(key_url_mi,key_url_to,url)
 				raise e
 if __name__ == '__main__':
 	#已经为ren表的uk和url表的url创建唯一索引
+	#use BaiduPanSo
+	#db.ren.ensureIndex({uk:1},{unique:true})
+	#db.url.ensureIndex({url:1},{unique:true})
 	#fangwen,1表示初始数据，2表示正在处理数据（意外数据会被保存在此），3表示已经计算数据
 	#因为mongodb比较慢，所以引入队列
 	#启动/opt/mongodb-3.0.7/bin/mongod --dbpath=/opt/mongodb-3.0.7/data/ --logpath=/opt/mongodb-3.0.7/log/mongo.log --fork
@@ -158,12 +177,10 @@ if __name__ == '__main__':
 	ren_queue = Queue()
 	url_queue = Queue()
 
-
 	init()
 
 	#queue
 	worker=threading.Thread(target=check,name='name')
-	worker.setDaemon(True)
 	worker.start()
 	#ren
 	for i in range(2):
